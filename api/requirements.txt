@@ -1,0 +1,3 @@
+# No dependencies required for this Vercel stub entrypoint.
+# The actual application dependencies (openai, streamlit, moviepy, etc.)
+# are only needed when running locally or via Docker (Cloud Run).
