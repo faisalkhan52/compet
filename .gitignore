@@ -1,0 +1,22 @@
+# Environments
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables
+.env
+
+# Uploads and temporary files
+uploads/
+videos/
+downloads/
+output/
+
+# IDEs and Gemini
+.vscode/
+.gemini/
