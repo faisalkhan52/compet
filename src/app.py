@@ -6,6 +6,7 @@ from pathlib import Path
 from transcriber import transcribe_audio
 from summarizer import generate_podcast_analysis
 from video_extractor import extract_audio_from_video
+from youtube_extractor import download_youtube_audio, get_youtube_info, is_valid_youtube_url
 
 load_dotenv()
 
@@ -58,6 +59,10 @@ if "transcription_request" not in st.session_state:
     st.session_state.transcription_request = {}
 if "content_source" not in st.session_state:
     st.session_state.content_source = "🎙️ Podcast File"
+if "youtube_url" not in st.session_state:
+    st.session_state.youtube_url = ""
+if "youtube_info" not in st.session_state:
+    st.session_state.youtube_info = None
 
 # Sidebar: File upload
 with st.sidebar:
@@ -105,9 +110,35 @@ with st.sidebar:
             st.markdown(f"*File size:* {uploaded_video.size / 1024 / 1024:.2f} MB")
             
     elif st.session_state.content_source == "🎥 YouTube Link":
-        st.markdown("Enter a YouTube URL:")
-        youtube_url = st.text_input("YouTube URL", label_visibility="collapsed")
-        st.info("YouTube integration is currently a stub and not fully implemented.")
+        st.markdown("Paste a YouTube video URL:")
+        youtube_url_input = st.text_input(
+            "YouTube URL",
+            placeholder="https://www.youtube.com/watch?v=...",
+            label_visibility="collapsed",
+            value=st.session_state.youtube_url,
+        )
+
+        if youtube_url_input and youtube_url_input != st.session_state.youtube_url:
+            st.session_state.youtube_url = youtube_url_input
+            st.session_state.youtube_info = None  # reset preview on new URL
+
+        if st.session_state.youtube_url:
+            if not is_valid_youtube_url(st.session_state.youtube_url):
+                st.error("❌ Invalid YouTube URL")
+            else:
+                if st.button("🔍 Fetch Video Info", use_container_width=True):
+                    with st.spinner("Fetching video details..."):
+                        st.session_state.youtube_info = get_youtube_info(st.session_state.youtube_url)
+
+                if st.session_state.youtube_info:
+                    info = st.session_state.youtube_info
+                    if info["success"]:
+                        st.success(f"🎬 **{info['title']}**")
+                        mins = int(info['duration'] // 60)
+                        secs = int(info['duration'] % 60)
+                        st.caption(f"👤 {info['uploader']}  •  ⏱️ {mins}:{secs:02d}")
+                    else:
+                        st.error(f"❌ {info['error']}")
 
     st.markdown("---")
     st.markdown("*How it works:*")
@@ -129,8 +160,9 @@ if st.session_state.content_source == "🎙️ Podcast File" and st.session_stat
 elif st.session_state.content_source == "🎬 Video File" and st.session_state.uploaded_video_name:
     st.info(f"📁 *Current video:* {st.session_state.uploaded_video_name} [VIDEO]")
     content_type = "video"
-elif st.session_state.content_source == "🎥 YouTube Link":
-    st.info(f"🔗 *Current source:* YouTube Link [YOUTUBE]")
+elif st.session_state.content_source == "🎥 YouTube Link" and st.session_state.youtube_url:
+    yt_title = st.session_state.youtube_info["title"] if st.session_state.youtube_info and st.session_state.youtube_info["success"] else st.session_state.youtube_url
+    st.info(f"🎥 *Current source:* {yt_title} [YOUTUBE]")
     content_type = "youtube"
 else:
     st.warning("👉 *Start by selecting a content source in the sidebar*")
@@ -197,8 +229,33 @@ with tab1:
                             st.error(f"❌ Transcription failed: {result['error']}")
 
         elif st.session_state.content_source == "🎥 YouTube Link":
-            st.button("🎥 Extract & Transcribe YouTube", type="primary", use_container_width=True, disabled=True)
-            st.caption("YouTube transcription is not fully implemented.")
+            if st.button("🎥 Download & Transcribe YouTube", type="primary", use_container_width=True):
+                if not st.session_state.youtube_url or not is_valid_youtube_url(st.session_state.youtube_url):
+                    st.error("❌ Please enter a valid YouTube URL in the sidebar first")
+                else:
+                    with st.spinner("⬇️ Downloading audio from YouTube..."):
+                        yt_result = download_youtube_audio(st.session_state.youtube_url)
+
+                    if not yt_result["success"]:
+                        st.error(f"❌ Download failed: {yt_result['error']}")
+                    else:
+                        audio_path = yt_result["file_path"]
+                        st.success(f"✅ Audio downloaded: **{yt_result['title']}**")
+
+                        with st.spinner("🔄 Transcribing audio using Whisper API..."):
+                            result = transcribe_audio(audio_path, source_type="youtube")
+                            st.session_state.transcription_request = {
+                                "model": "whisper-1",
+                                "file": os.path.basename(audio_path),
+                                "language": "en",
+                                "source": yt_result["title"],
+                            }
+
+                        if result["success"]:
+                            st.session_state.transcript = result["text"]
+                            st.success("✅ Transcription complete!")
+                        else:
+                            st.error(f"❌ Transcription failed: {result['error']}")
 
     # Show transcript if available
     if st.session_state.transcript:
@@ -393,3 +450,16 @@ if show_teach_mode:
         with st.expander("🎙️ Transcription API Request", expanded=False):
             st.markdown("*Parameters sent to Whisper API:*")
             st.code(json.dumps(st.session_state.transcription_request, indent=2), language="json")
+
+# Dummy WSGI application to satisfy Vercel's serverless function requirement.
+# Streamlit requires WebSockets and persistent processes, which Vercel Serverless Functions
+# do not support. This WSGI app will return a helpful error message if accessed via Vercel.
+def app(environ, start_response):
+    status = '200 OK'
+    headers = [('Content-type', 'text/plain; charset=utf-8')]
+    start_response(status, headers)
+    return [b"This is a Streamlit application. Streamlit requires persistent WebSockets and cannot be hosted on Vercel's Serverless Functions. Please deploy this repository using Streamlit Community Cloud, Google Cloud Run, or Render."]
+
+application = app
+handler = app
+

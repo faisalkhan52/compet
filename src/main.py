@@ -129,3 +129,13 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Dummy WSGI application to satisfy Vercel's serverless function requirement.
+def app(environ, start_response):
+    status = '200 OK'
+    headers = [('Content-type', 'text/plain; charset=utf-8')]
+    start_response(status, headers)
+    return [b"CLI entrypoint. This is a Streamlit application. Streamlit requires persistent WebSockets and cannot be hosted on Vercel's Serverless Functions. Please deploy this repository using Streamlit Community Cloud, Google Cloud Run, or Render."]
+
+application = app
+handler = app
