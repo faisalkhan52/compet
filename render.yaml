@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: podcast-notes-agent
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false        # set manually in Render dashboard (secret)
+    healthCheckPath: /
+    autoDeploy: true
