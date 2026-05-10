@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import yt_dlp
 
 
@@ -10,6 +11,11 @@ def is_valid_youtube_url(url: str) -> bool:
         r"(https?://)?(www\.)?youtube\.com/shorts/[\w\-]+",
     ]
     return any(re.search(p, url) for p in patterns)
+
+
+def _ffmpeg_available() -> bool:
+    """Return True if ffmpeg is available on PATH."""
+    return shutil.which("ffmpeg") is not None
 
 
 def get_youtube_info(url: str) -> dict:
@@ -44,7 +50,12 @@ def get_youtube_info(url: str) -> dict:
 
 def download_youtube_audio(url: str, output_dir: str = "downloads") -> dict:
     """
-    Download the audio track of a YouTube video as an MP3.
+    Download the audio track of a YouTube video.
+
+    Strategy:
+    - If ffmpeg is available: download best audio and convert to MP3.
+    - If ffmpeg is NOT available: download best native audio (m4a/webm/opus)
+      without any post-processing. Whisper API accepts all these formats.
 
     Args:
         url: YouTube video URL
@@ -64,42 +75,56 @@ def download_youtube_audio(url: str, output_dir: str = "downloads") -> dict:
             }
 
         os.makedirs(output_dir, exist_ok=True)
-
-        # Temporary output template — yt-dlp fills in the title
         output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
 
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "outtmpl": output_template,
-            "quiet": True,
-            "no_warnings": True,
-            "postprocessors": [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }
-            ],
-        }
+        ffmpeg = _ffmpeg_available()
+
+        if ffmpeg:
+            # Full quality: download best audio + convert to MP3 via ffmpeg
+            ydl_opts = {
+                "format": "bestaudio/best",
+                "outtmpl": output_template,
+                "quiet": True,
+                "no_warnings": True,
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "192",
+                    }
+                ],
+            }
+        else:
+            # No ffmpeg: prefer m4a (natively supported by Whisper), fall back to any audio
+            ydl_opts = {
+                "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+                "outtmpl": output_template,
+                "quiet": True,
+                "no_warnings": True,
+                # No postprocessors — skip ffmpeg entirely
+            }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             title = info.get("title", "youtube_audio")
             duration = info.get("duration", 0)
+            # yt-dlp tells us the actual extension used
+            ext = info.get("ext", "m4a") if not ffmpeg else "mp3"
 
-        # Resolve the actual saved file path (yt-dlp sanitises the title)
+        # Resolve actual file path
         safe_title = yt_dlp.utils.sanitize_filename(title)
-        file_path = os.path.join(output_dir, f"{safe_title}.mp3")
+        file_path = os.path.join(output_dir, f"{safe_title}.{ext}")
 
-        # Fallback: find any mp3 in the output dir if exact name not found
+        # Fallback: pick the most recently modified audio file in output_dir
         if not os.path.exists(file_path):
-            mp3_files = sorted(
-                [f for f in os.listdir(output_dir) if f.endswith(".mp3")],
+            audio_exts = (".mp3", ".m4a", ".webm", ".opus", ".ogg", ".wav")
+            audio_files = sorted(
+                [f for f in os.listdir(output_dir) if f.endswith(audio_exts)],
                 key=lambda f: os.path.getmtime(os.path.join(output_dir, f)),
                 reverse=True,
             )
-            if mp3_files:
-                file_path = os.path.join(output_dir, mp3_files[0])
+            if audio_files:
+                file_path = os.path.join(output_dir, audio_files[0])
             else:
                 return {
                     "success": False,
